@@ -147,6 +147,8 @@ Scan files or URLs for UI anti-patterns and design quality issues.
 Options:
   --json              Output results as JSON
   --quiet             In text mode, only print the final findings count
+  --url <value>       Scan a URL passed as its own argument, keeping query
+                      string & out of bare argv. Also accepts --url=<value>.
   --scope <name>      Only report rules in the given design domain
                       (type, layout). Comma-separated.
   --viewport <WxH>    Browser viewport for URL scans (default 1280x800),
@@ -186,8 +188,16 @@ Examples:
   impeccable detect src/
   impeccable detect index.html
   impeccable detect https://example.com
+  impeccable detect --url "https://example.com?foo=1&bar=2"
+  impeccable detect --url="https://example.com?foo=1&bar=2"
   impeccable detect --json .
-  impeccable detect --no-config src/`);
+  impeccable detect --no-config src/
+
+Windows cmd.exe note:
+  Bare URLs with & are command separators. Prefer --url with quotes, or use
+  PowerShell / Git Bash. Example:
+    impeccable detect --url "https://example.com?foo=1&bar=2"
+    impeccable detect --url="https://example.com?foo=1&bar=2"`);
 }
 
 async function detectCli() {
@@ -214,6 +224,25 @@ async function detectCli() {
     process.stderr.write(
       'Note: --gpt and --gemini are deprecated and ignored. Generated-UI tells now run by default.\n',
     );
+  }
+  // --url <url> keeps query strings with & out of bare argv. On Windows cmd.exe,
+  // unquoted & is a command separator, so prefer: detect --url "https://...?a=1&b=2"
+  // Help mode never reaches the scan, so a bare `--url` must not exit with a
+  // parse error before the usage text gets a chance to print.
+  const urlFlagTargets = [];
+  for (let i = 0; !helpMode && i < args.length; i++) {
+    if (args[i] !== '--url' && !args[i].startsWith('--url=')) continue;
+    const inline = args[i].startsWith('--url=');
+    const value = inline ? args[i].slice('--url='.length) : args[i + 1];
+    if (!value || value.startsWith('--')) {
+      process.stderr.write(
+        'Error: --url requires a URL value. On Windows cmd.exe quote it, e.g. --url "https://example.com?a=1&b=2"\n',
+      );
+      process.exit(1);
+    }
+    urlFlagTargets.push(value);
+    args.splice(i, inline ? 1 : 2);
+    i -= 1;
   }
   const configEnabled = !args.includes('--no-config');
   const detectionConfig = configEnabled
@@ -278,7 +307,7 @@ async function detectCli() {
     const designSystem = loadDesignSystemForTarget(localPath, { cache: designSystemCache });
     return designSystem ? { ...baseScanOptions, designSystem } : baseScanOptions;
   };
-  const targets = args.filter(a => !a.startsWith('--'));
+  const targets = [...urlFlagTargets, ...args.filter(a => !a.startsWith('--'))];
 
   if (helpMode) { printUsage(); process.exit(0); }
 

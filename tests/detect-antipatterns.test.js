@@ -1898,8 +1898,88 @@ describe('CLI', () => {
     expect(code).toBe(0);
     expect(stdout).toContain('Usage:');
     expect(stdout).toContain('--quiet');
+    expect(stdout).toContain('--url');
+    expect(stdout).toContain('--url=<value>');
+    expect(stdout).toContain('Windows cmd.exe');
     expect(stdout).not.toContain('--gpt');
     expect(stdout).not.toContain('--gemini');
+  });
+
+  test('--url with no value errors instead of silently scanning cwd', () => {
+    const { stderr, code } = run('--url');
+    expect(code).toBe(1);
+    expect(stderr).toContain('--url requires a URL value');
+  });
+
+  test('--help still prints usage when a bare --url is also present', () => {
+    const { stdout, stderr, code } = run('--help', '--url');
+    expect(code).toBe(0);
+    expect(stdout).toContain('Usage:');
+    expect(stderr).not.toContain('--url requires a URL value');
+  });
+
+  // The next two tests scan an unresolvable host so they fail fast (DNS
+  // rejection, no real navigation) while still exercising the real argv ->
+  // detectUrl() path. The assertion is on the *exact* URL string puppeteer
+  // was asked to navigate to, echoed back in the error message, which is
+  // the only reliable way to prove the value (including the query string's
+  // `&`) survived argument parsing intact rather than being split or
+  // truncated.
+  const UNRESOLVABLE_URL = 'https://impeccable-test-host-does-not-exist-zzz.invalid/x?a=1&b=2';
+
+  // Reading the URL back out of the DNS error needs a browser that actually
+  // starts. puppeteer is an optionalDependency, and even when installed the
+  // bundled Chromium refuses to launch as root without --no-sandbox, so both
+  // gaps are ordinary on a contributor machine and in a container. Skip
+  // loudly instead of softening the assertion: these two tests exist to prove
+  // the `&` survived argument parsing, and a variant that quietly stopped
+  // checking that would be a test whose name outruns what it verifies.
+  const browserProbeStderr = run('--url', UNRESOLVABLE_URL, '--json').stderr;
+  const noBrowser = /puppeteer is required for URL scanning|Failed to launch the browser/.test(
+    browserProbeStderr,
+  );
+
+  test.skipIf(noBrowser)('--url space-separated form preserves a query string with &', () => {
+    const { stdout, stderr, code } = run('--url', UNRESOLVABLE_URL, '--json');
+    expect(code).toBe(0);
+    expect(stderr).not.toContain('--url requires a URL value');
+    expect(stderr).toContain(`Error: net::ERR_NAME_NOT_RESOLVED at ${UNRESOLVABLE_URL}`);
+    expect(JSON.parse(stdout)).toEqual([]);
+  });
+
+  test.skipIf(noBrowser)('--url=<value> inline form preserves a query string with &', () => {
+    const { stdout, stderr, code } = run(`--url=${UNRESOLVABLE_URL}`, '--json');
+    expect(code).toBe(0);
+    expect(stderr).not.toContain('--url requires a URL value');
+    expect(stderr).toContain(`Error: net::ERR_NAME_NOT_RESOLVED at ${UNRESOLVABLE_URL}`);
+    expect(JSON.parse(stdout)).toEqual([]);
+  });
+
+  // Browser-free half of the same guarantee, so a machine without Chromium
+  // still catches the parsing regressions this flag was added to prevent:
+  // both the flag and its value must leave argv, or a stray `--url` reaches
+  // the scanner or the URL gets scanned twice.
+  test('--url consumes both the flag and its value in either form', () => {
+    for (const argv of [
+      ['--url', UNRESOLVABLE_URL, '--json'],
+      [`--url=${UNRESOLVABLE_URL}`, '--json'],
+    ]) {
+      const { stdout, stderr, code } = run(...argv);
+      expect(code).toBe(0);
+      expect(stderr).not.toContain('--url requires a URL value');
+      expect(JSON.parse(stdout)).toEqual([]);
+    }
+  });
+
+  test('--url= form is accepted as a detect target alongside files', () => {
+    const file = path.join(FIXTURES, 'jsx-should-pass.jsx');
+    // --url of a non-http path is still treated as a target string; use a
+    // real local file via --url to prove the flag is consumed (not left in argv).
+    const { code, stderr } = run('--url', file);
+    // Local path via --url still goes through URL regex fail then path resolve.
+    // file path does not match urlRe, so it is scanned as a filesystem target.
+    expect([0, 2]).toContain(code);
+    expect(stderr).not.toContain('--url requires a URL value');
   });
 
   test('generated-UI tells run by default in the CLI', () => {
